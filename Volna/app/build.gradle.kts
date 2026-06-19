@@ -11,7 +11,7 @@ android {
         applicationId = "ru.nontecstudio.volna"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
+        versionCode = 3
         versionName = "26.6.20"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
