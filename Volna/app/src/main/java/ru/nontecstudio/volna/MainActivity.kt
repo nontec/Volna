@@ -11,11 +11,13 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -222,12 +224,56 @@ class MainActivity : ComponentActivity() {
             textColor = Color.WHITE
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.6f).apply {
-                setMargins(0, 32, 0, 16)
+                setMargins(0, 32, 0, 8)
             }
         }
 
         rootLayout.addView(pttButton)
         updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
+
+        // ПАНЕЛЬ С ССЫЛКАМИ НА ЮРИДИЧЕСКИЕ ДОКУМЕНТЫ
+        val legalPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 8, 0, 0)
+            }
+        }
+
+        val privacyLink = TextView(this).apply {
+            text = "Политика конфиденциальности"
+            textSize = 11f
+            textColor = colorTextSecondary
+            setPadding(16, 16, 16, 16)
+            setOnClickListener {
+                openWebUrl("https://nontec.ru/volna/privacy.html")
+            }
+        }
+
+        val dividerLink = TextView(this).apply {
+            text = "•"
+            textSize = 11f
+            textColor = colorTextSecondary
+            setPadding(4, 16, 4, 16)
+        }
+
+        val termsLink = TextView(this).apply {
+            text = "Условия использования"
+            textSize = 11f
+            textColor = colorTextSecondary
+            setPadding(16, 16, 16, 16)
+            setOnClickListener {
+                openWebUrl("https://nontec.ru/volna/terms.html")
+            }
+        }
+
+        legalPanel.addView(privacyLink)
+        legalPanel.addView(dividerLink)
+        legalPanel.addView(termsLink)
+        rootLayout.addView(legalPanel) // Добавляем панель в самый низ UI
 
         setContentView(rootLayout)
         checkPermissions()
@@ -238,7 +284,6 @@ class MainActivity : ComponentActivity() {
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    // Защита: если мы еще не сбросили старый таймаут, не даем говорить
                     if (isTransmitTimedOut) return@setOnTouchListener false
 
                     playTone(ToneGenerator.TONE_SUP_RADIO_ACK, 100)
@@ -254,14 +299,11 @@ class MainActivity : ComponentActivity() {
                     uiHandler.removeCallbacks(transmitTimeoutRunnable)
 
                     if (!isTransmitTimedOut) {
-                        // Обычное завершение нормальной передачи (до 30 сек)
                         stopBroadcasting()
                     } else {
-                        // Сюда заходим, когда пользователь наконец ОТПУСТИЛ палец после таймаута
                         isTransmitTimedOut = false
                     }
 
-                    // В любом случае возвращаем интерфейс в исходное состояние свободы
                     statusTextView.text = "Эфир свободен"
                     statusTextView.textColor = Color.parseColor("#34C759")
                     updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
@@ -269,6 +311,16 @@ class MainActivity : ComponentActivity() {
                 }
                 else -> false
             }
+        }
+    }
+
+    // Вспомогательный метод для открытия ссылок во внешнем браузере
+    private fun openWebUrl(url: String) {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            startActivity(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
