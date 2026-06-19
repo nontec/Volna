@@ -36,16 +36,20 @@ class MainActivity : ComponentActivity() {
 
     private var walkieService: WalkieTalkieService? = null
     private var isBound = false
+    private var isRadioActive = true
+    private var isTransmitTimedOut = false // Флаг: была ли отсечка по таймауту в текущей сессии нажатия
 
     private lateinit var logAdapter: ArrayAdapter<String>
     private lateinit var statusTextView: TextView
     private lateinit var pttButton: Button
+    private lateinit var powerButton: Button
 
     private val uiHandler = Handler(Looper.getMainLooper())
     private var isSomeoneSpeaking = false
 
-    // Генератор пиликанья (использует поток звонка/уведомлений для стабильности)
     private val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+
+    private val MAX_TRANSMIT_TIME_MS = 30000L
 
     private val colorBackground = Color.parseColor("#121212")
     private val colorPrimary = Color.parseColor("#7F3DFF")
@@ -58,11 +62,23 @@ class MainActivity : ComponentActivity() {
         isSomeoneSpeaking = false
         statusTextView.text = "Эфир свободен"
         statusTextView.setTextColor(Color.parseColor("#34C759"))
-        pttButton.isEnabled = true
-        updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
-
-        // Звук освобождения эфира (Roger Beep) для локального пользователя
+        if (isRadioActive && !isTransmitTimedOut) {
+            pttButton.isEnabled = true
+            updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
+        }
         playTone(ToneGenerator.TONE_PROP_BEEP, 150)
+    }
+
+    private val transmitTimeoutRunnable = Runnable {
+        isTransmitTimedOut = true // Фиксируем таймаут
+        stopBroadcasting()
+
+        statusTextView.text = "Лимит передачи (30 сек) превышен"
+        statusTextView.setTextColor(colorTransmit)
+
+        // Кнопку НЕ выключаем через isEnabled = false, только меняем визуал!
+        updateButtonUi(colorBlocked, "ОТПУСТИТЕ КНОПКУ")
+        playTone(ToneGenerator.TONE_PROP_BEEP2, 300)
     }
 
     private val connection = object : ServiceConnection {
@@ -72,17 +88,12 @@ class MainActivity : ComponentActivity() {
             isBound = true
 
             walkieService?.onFrameReceivedListener = { deviceName, _ ->
-                val amIEncoding = (pttButton.text == "В ЭФИРЕ...")
-
-                if (!amIEncoding) {
+                if (isRadioActive && pttButton.text != "В ЭФИРЕ..." && !isTransmitTimedOut) {
                     uiHandler.removeCallbacks(resetStatusRunnable)
-
                     if (!isSomeoneSpeaking) {
                         isSomeoneSpeaking = true
                         runOnUiThread {
-                            // Звуковой сигнал о начале входящей передачи
                             playTone(ToneGenerator.TONE_SUP_RADIO_ACK, 100)
-
                             statusTextView.text = " $deviceName в эфире..."
                             statusTextView.setTextColor(Color.parseColor("#FF9500"))
                             pttButton.isEnabled = false
@@ -110,6 +121,10 @@ class MainActivity : ComponentActivity() {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(colorBackground)
             setPadding(54, 54, 54, 54)
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
                 setOnApplyWindowInsetsListener { view, insets ->
@@ -121,14 +136,49 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        val topPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
         statusTextView = TextView(this).apply {
             text = "Эфир свободен"
-            textSize = 22f
+            textSize = 20f
             textColor = Color.parseColor("#34C759")
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            setPadding(0, 16, 0, 32)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        rootLayout.addView(statusTextView)
+
+        powerButton = Button(this).apply {
+            text = "ВЫКЛ. РАЦИЮ"
+            textSize = 12f
+            textColor = Color.WHITE
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#3A3A3C"))
+                cornerRadius = 20f
+            }
+            setPadding(24, 0, 24, 0)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+
+            setOnClickListener {
+                toggleRadioState()
+            }
+        }
+
+        topPanel.addView(statusTextView)
+        topPanel.addView(powerButton)
+        rootLayout.addView(topPanel)
+
+        val spacer = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 32)
+        }
+        rootLayout.addView(spacer)
 
         val logTitle = TextView(this).apply {
             text = "ИСТОРИЯ ПЕРЕДАЧ"
@@ -136,7 +186,10 @@ class MainActivity : ComponentActivity() {
             textColor = colorTextSecondary
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
             letterSpacing = 0.15f
-            setPadding(0, 0, 0, 16)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, 0, 16) }
         }
         rootLayout.addView(logTitle)
 
@@ -147,16 +200,12 @@ class MainActivity : ComponentActivity() {
             isVerticalScrollBarEnabled = false
         }
 
-        // Восстановление списка при повороте экрана
         val savedList = savedInstanceState?.getStringArrayList("ARG_LOG_HISTORY") ?: ArrayList<String>()
-
         logAdapter = object : ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, savedList) {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val view = super.getView(position, convertView, parent) as TextView
                 view.textColor = colorTextPrimary
                 view.textSize = 15f
-                view.typeface = Typeface.create(Typeface.MONOSPACE, Typeface.NORMAL)
-
                 view.background = GradientDrawable().apply {
                     setColor(Color.parseColor("#1C1C1E"))
                     cornerRadius = 20f
@@ -172,42 +221,47 @@ class MainActivity : ComponentActivity() {
             textSize = 20f
             textColor = Color.WHITE
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0, 0.5f
-            ).apply { setMargins(0, 48, 0, 16) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.6f).apply {
+                setMargins(0, 32, 0, 16)
+            }
         }
 
-        updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
         rootLayout.addView(pttButton)
+        updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
+
         setContentView(rootLayout)
-
         checkPermissions()
-
-        val intent = Intent(this, WalkieTalkieService::class.java)
-        startService(intent)
-        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        startRadioService()
 
         pttButton.setOnTouchListener { _, event ->
-            if (isSomeoneSpeaking) return@setOnTouchListener false
+            if (!isRadioActive || isSomeoneSpeaking) return@setOnTouchListener false
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    // Звук старта передачи перед открытием микрофона
+                    // Защита: если мы еще не сбросили старый таймаут, не даем говорить
+                    if (isTransmitTimedOut) return@setOnTouchListener false
 
+                    playTone(ToneGenerator.TONE_SUP_RADIO_ACK, 100)
                     walkieService?.audioEngine?.startRecording()
                     updateButtonUi(colorTransmit, "В ЭФИРЕ...")
-                    statusTextView.text = " Вы в эфире..."
+                    statusTextView.text = "Вы в эфире..."
                     statusTextView.textColor = colorTransmit
+
+                    uiHandler.postDelayed(transmitTimeoutRunnable, MAX_TRANSMIT_TIME_MS)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    walkieService?.audioEngine?.stopRecording()
+                    uiHandler.removeCallbacks(transmitTimeoutRunnable)
 
-                    // Локальный Roger Beep
-                    playTone(ToneGenerator.TONE_PROP_BEEP, 150)
+                    if (!isTransmitTimedOut) {
+                        // Обычное завершение нормальной передачи (до 30 сек)
+                        stopBroadcasting()
+                    } else {
+                        // Сюда заходим, когда пользователь наконец ОТПУСТИЛ палец после таймаута
+                        isTransmitTimedOut = false
+                    }
 
+                    // В любом случае возвращаем интерфейс в исходное состояние свободы
                     statusTextView.text = "Эфир свободен"
                     statusTextView.textColor = Color.parseColor("#34C759")
                     updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
@@ -218,7 +272,55 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Сохранение состояния перед уничтожением Activity
+    private fun toggleRadioState() {
+        if (isRadioActive) {
+            isRadioActive = false
+            powerButton.text = "ВКЛ. РАЦИЮ"
+            powerButton.background = GradientDrawable().apply {
+                setColor(colorPrimary)
+                cornerRadius = 20f
+            }
+            statusTextView.text = "Рация отключена"
+            statusTextView.textColor = colorTextSecondary
+            pttButton.isEnabled = false
+            updateButtonUi(colorBlocked, "РАЦИЯ ВЫКЛЮЧЕНА")
+            stopRadioService()
+        } else {
+            isRadioActive = true
+            isTransmitTimedOut = false
+            powerButton.text = "ВЫКЛ. РАЦИЮ"
+            powerButton.background = GradientDrawable().apply {
+                setColor(Color.parseColor("#3A3A3C"))
+                cornerRadius = 20f
+            }
+            statusTextView.text = "Эфир свободен"
+            statusTextView.textColor = Color.parseColor("#34C759")
+            pttButton.isEnabled = true
+            updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
+            startRadioService()
+        }
+    }
+
+    private fun startRadioService() {
+        val intent = Intent(this, WalkieTalkieService::class.java)
+        startService(intent)
+        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    private fun stopRadioService() {
+        if (isBound) {
+            unbindService(connection)
+            isBound = false
+        }
+        val intent = Intent(this, WalkieTalkieService::class.java)
+        stopService(intent)
+    }
+
+    private fun stopBroadcasting() {
+        walkieService?.audioEngine?.stopRecording()
+        playTone(ToneGenerator.TONE_PROP_BEEP, 150)
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         val listData = ArrayList<String>()
@@ -229,11 +331,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playTone(toneType: Int, durationMs: Int) {
-        try {
-            toneGenerator.startTone(toneType, durationMs)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        try { toneGenerator.startTone(toneType, durationMs) } catch (e: Exception) { e.printStackTrace() }
     }
 
     private fun updateButtonUi(color: Int, textString: String) {
@@ -257,17 +355,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        if (isBound) {
-            unbindService(connection)
-            isBound = false
-        }
+        stopRadioService()
         toneGenerator.release()
     }
 
     override fun onPause() {
         super.onPause()
+        uiHandler.removeCallbacks(transmitTimeoutRunnable)
         if (pttButton.text == "В ЭФИРЕ...") {
-            walkieService?.audioEngine?.stopRecording()
+            stopBroadcasting()
+            isTransmitTimedOut = false
             statusTextView.text = "Эфир свободен"
             statusTextView.textColor = Color.parseColor("#34C759")
             updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
