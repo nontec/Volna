@@ -273,11 +273,16 @@ class MainActivity : ComponentActivity() {
         legalPanel.addView(privacyLink)
         legalPanel.addView(dividerLink)
         legalPanel.addView(termsLink)
-        rootLayout.addView(legalPanel) // Добавляем панель в самый низ UI
+        rootLayout.addView(legalPanel)
 
         setContentView(rootLayout)
-        checkPermissions()
-        startRadioService()
+
+        // БЕЗОПАСНЫЙ ЗАПУСК СЕРВИСА: Проверяем наличие критического разрешения на микрофон
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startRadioService()
+        } else {
+            checkPermissions()
+        }
 
         pttButton.setOnTouchListener { _, event ->
             if (!isRadioActive || isSomeoneSpeaking) return@setOnTouchListener false
@@ -314,7 +319,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Вспомогательный метод для открытия ссылок во внешнем браузере
+    // Обработка ответа пользователя на системный запрос разрешений
+    // Обработка ответа пользователя на системный запрос разрешений
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 102) {
+            val micGranted = permissions.indices.firstOrNull { permissions[it] == Manifest.permission.RECORD_AUDIO }
+                ?.let { grantResults[it] == PackageManager.PERMISSION_GRANTED } ?: false
+
+            if (micGranted) {
+                // Доступ получен, теперь создание FGS-сервиса с типом microphone разрешено системой
+                startRadioService()
+            } else {
+                // Если юзер отказал, корректно переводим UI в заблокированное состояние без вылета
+                statusTextView.text = "Требуется доступ к микрофону"
+                statusTextView.setTextColor(colorTransmit)
+                pttButton.isEnabled = false
+                updateButtonUi(colorBlocked, "НЕТ ДОСТУПА К МИКРОФОНУ")
+            }
+        }
+    }
+
     private fun openWebUrl(url: String) {
         try {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
@@ -338,18 +363,23 @@ class MainActivity : ComponentActivity() {
             updateButtonUi(colorBlocked, "РАЦИЯ ВЫКЛЮЧЕНА")
             stopRadioService()
         } else {
-            isRadioActive = true
-            isTransmitTimedOut = false
-            powerButton.text = "ВЫКЛ. РАЦИЮ"
-            powerButton.background = GradientDrawable().apply {
-                setColor(Color.parseColor("#3A3A3C"))
-                cornerRadius = 20f
+            // При повторном включении проверяем разрешения заново на случай, если их отозвали в настройках ОС
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                isRadioActive = true
+                isTransmitTimedOut = false
+                powerButton.text = "ВЫКЛ. РАЦИЮ"
+                powerButton.background = GradientDrawable().apply {
+                    setColor(Color.parseColor("#3A3A3C"))
+                    cornerRadius = 20f
+                }
+                statusTextView.text = "Эфир свободен"
+                statusTextView.textColor = Color.parseColor("#34C759")
+                pttButton.isEnabled = true
+                updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
+                startRadioService()
+            } else {
+                checkPermissions()
             }
-            statusTextView.text = "Эфир свободен"
-            statusTextView.textColor = Color.parseColor("#34C759")
-            pttButton.isEnabled = true
-            updateButtonUi(colorPrimary, "ЗАЖМИ И ГОВОРИ")
-            startRadioService()
         }
     }
 
